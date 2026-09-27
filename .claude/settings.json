@@ -1,0 +1,112 @@
+{
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "TodoWrite",
+      "WebSearch",
+      "Bash",
+      "PowerShell",
+      "WebFetch(domain:reactnative.dev)",
+      "WebFetch(domain:docs.expo.dev)",
+      "WebFetch(domain:reactnavigation.org)",
+      "WebFetch(domain:tanstack.com)",
+      "WebFetch(domain:docs.nestjs.com)",
+      "WebFetch(domain:typeorm.io)",
+      "WebFetch(domain:www.postgresql.org)",
+      "WebFetch(domain:docs.ultralytics.com)",
+      "WebFetch(domain:developer.apple.com)",
+      "WebFetch(domain:nodejs.org)",
+      "WebFetch(domain:pnpm.io)",
+      "WebFetch(domain:developer.mozilla.org)",
+      "WebFetch(domain:www.typescriptlang.org)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:gist.github.com)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:npmjs.com)",
+      "WebFetch(domain:registry.npmjs.org)",
+      "WebFetch(domain:stackoverflow.com)"
+    ],
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean -fd:*)",
+      "PowerShell(Remove-Item * -Recurse *)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Write(**/.env)",
+      "Write(**/.env.*)",
+      "Edit(**/.env)",
+      "Edit(**/.env.*)",
+      "Read(**/configs/.*.env)",
+      "Write(**/configs/.*.env)",
+      "Edit(**/configs/.*.env)",
+      "Read(**/secrets/**)",
+      "Write(**/secrets/**)",
+      "Edit(**/secrets/**)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Read(**/*.p8)",
+      "Read(**/*.p12)",
+      "Read(**/*.pfx)",
+      "Read(**/*.mobileprovision)",
+      "Read(**/*.keystore)",
+      "Read(**/*.jks)",
+      "Read(**/*-key.json)",
+      "Read(**/*service-account*.json)",
+      "Read(**/*credentials*.json)",
+      "Read(**/id_rsa)",
+      "Read(**/id_ed25519)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Read|Edit|Write|NotebookEdit|Glob|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "node \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/scope-guard.js\"",
+            "timeout": 15,
+            "statusMessage": "Scope guard: keeping tools inside the denly workspace"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "node \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/block-coauthor.js\"",
+            "timeout": 10,
+            "statusMessage": "Commit guard: no Co-Authored-By / Generated-with trailers"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "node \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/post-edit-check.js\"",
+            "timeout": 150,
+            "statusMessage": "Post-edit: tsc --noEmit on the touched repo"
+          }
+        ]
+      }
+    ]
+  }
+}
