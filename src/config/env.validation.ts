@@ -9,13 +9,56 @@ import {
   Max,
   Min,
   MinLength,
+  Validate,
+  type ValidationArguments,
+  ValidatorConstraint,
+  type ValidatorConstraintInterface,
   validateSync,
 } from 'class-validator';
+import { describeInvalidCorsOrigin, splitCorsOrigins } from './cors-origins.js';
 
 export enum NodeEnv {
   DEVELOPMENT = 'development',
   TEST = 'test',
   PRODUCTION = 'production',
+}
+
+/** `LOG_LEVEL` values; Nest's `log` maps to `info`, `verbose` to `debug`. */
+export enum AppLogLevel {
+  ERROR = 'error',
+  WARN = 'warn',
+  INFO = 'info',
+  DEBUG = 'debug',
+}
+
+/** `LOG_FORMAT` values: one Cloud Logging JSON object per line, or a readable dev line. */
+export enum LogFormat {
+  JSON = 'json',
+  PRETTY = 'pretty',
+}
+
+// GCP project ids: 6-30 chars, lowercase letters, digits and hyphens, starting with a letter.
+const GCP_PROJECT_ID_PATTERN = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
+
+@ValidatorConstraint({ name: 'corsOrigins' })
+class CorsOriginsConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    return (
+      typeof value === 'string' &&
+      splitCorsOrigins(value).every(
+        (entry) => describeInvalidCorsOrigin(entry) === undefined,
+      )
+    );
+  }
+
+  defaultMessage(args: ValidationArguments): string {
+    const value: unknown = args.value;
+    if (typeof value !== 'string') return 'CORS_ORIGINS must be a string';
+    const problems = splitCorsOrigins(value)
+      .map((entry) => describeInvalidCorsOrigin(entry))
+      .filter((problem) => problem !== undefined);
+    return `CORS_ORIGINS must list exact http(s) origins separated by commas: ${problems.join('; ')}`;
+  }
 }
 
 /**
@@ -77,6 +120,31 @@ export class EnvironmentVariables {
   @Max(365)
   @IsOptional()
   REFRESH_TOKEN_TTL_DAYS: number = 30;
+
+  // Unset -> default by NODE_ENV (AppConfigService.logging): production info, test warn,
+  // development debug. Set-but-empty is rejected like any other invalid value.
+  @IsIn(Object.values(AppLogLevel))
+  @IsOptional()
+  LOG_LEVEL?: AppLogLevel;
+
+  // Unset -> json in production, pretty otherwise.
+  @IsIn(Object.values(LogFormat))
+  @IsOptional()
+  LOG_FORMAT?: LogFormat;
+
+  // Comma-separated exact browser origins; empty = no browser origin allowed. Requests without an
+  // Origin header (the mobile app, curl, health probes) are unaffected.
+  @Validate(CorsOriginsConstraint)
+  @IsOptional()
+  CORS_ORIGINS?: string;
+
+  // Lets JSON logs carry `logging.googleapis.com/trace` so Cloud Logging groups them per request.
+  @Matches(GCP_PROJECT_ID_PATTERN, {
+    message:
+      'GCP_PROJECT_ID must be a GCP project id (6-30 lowercase letters, digits or hyphens, starting with a letter)',
+  })
+  @IsOptional()
+  GCP_PROJECT_ID?: string;
 }
 
 /**
