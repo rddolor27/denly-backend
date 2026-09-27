@@ -49,6 +49,8 @@ import { HealthService } from './health.service.js';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(RequestIdMiddleware).forRoutes('*');
+    // Every route. Express 5 (path-to-regexp v8) rejects a bare `*`; `{*splat}` is the named
+    // optional wildcard Nest 12 expects (becomes `/api/{*splat}` under the global prefix).
+    consumer.apply(RequestIdMiddleware).forRoutes('{*splat}');
   }
 }
