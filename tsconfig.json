@@ -1,0 +1,40 @@
+{
+  "compilerOptions": {
+    // Nest 12's own packages are ESM-only, so the app is ESM (NodeNext) rather than CommonJS —
+    // relative and `@/`-aliased imports use an explicit ".js" specifier, resolved by TS against
+    // the co-located ".ts" source (the standard NodeNext authoring convention) and rewritten to a
+    // real relative path by tsc-alias at build time.
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    // TS 7 removes bare "baseUrl"; kept intentionally for the `@/` alias (path mapping is
+    // compile-time only — tsc-alias rewrites it in dist, Vitest resolves it via vite-tsconfig-paths).
+    "ignoreDeprecations": "6.0",
+    "baseUrl": "./",
+    "paths": {
+      "@/*": ["src/*"]
+    },
+    "outDir": "./dist",
+    "rootDir": "./",
+    "sourceMap": true,
+    "declaration": true,
+    "removeComments": true,
+    "incremental": true,
+    "skipLibCheck": true,
+    "resolvePackageJsonExports": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "strict": true,
+    "strictPropertyInitialization": false,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": true,
+    "noFallthroughCasesInSwitch": true
+  }
+}
