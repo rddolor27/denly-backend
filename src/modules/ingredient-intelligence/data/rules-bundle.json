@@ -1,0 +1,62 @@
+{
+  "rulesVersion": "rules-2026.09.1",
+  "confidenceFloor": 0.25,
+  "classFloors": {},
+  "bands": { "high": 0.7, "medium": 0.45 },
+  "rules": [
+    {
+      "id": "contains-meat",
+      "reason": "Raw meat was detected.",
+      "when": { "kind": "anyCategory", "values": ["meat"] },
+      "then": [{ "kind": "addFlag", "flag": "contains_meat" }]
+    },
+    {
+      "id": "contains-fish",
+      "reason": "Fish is a major allergen.",
+      "when": { "kind": "anyAllergen", "values": ["fish"] },
+      "then": [{ "kind": "addFlag", "flag": "contains_fish" }]
+    },
+    {
+      "id": "contains-crustacean-shellfish",
+      "reason": "Crustacean shellfish is a major allergen.",
+      "when": { "kind": "anyAllergen", "values": ["crustacean_shellfish"] },
+      "then": [{ "kind": "addFlag", "flag": "contains_crustacean_shellfish" }]
+    },
+    {
+      "id": "contains-mollusc",
+      "reason": "Molluscs are a major allergen.",
+      "when": { "kind": "anyAllergen", "values": ["mollusc"] },
+      "then": [{ "kind": "addFlag", "flag": "contains_mollusc" }]
+    },
+    {
+      "id": "contains-egg",
+      "reason": "Egg is a major allergen.",
+      "when": { "kind": "anyAllergen", "values": ["egg"] },
+      "then": [{ "kind": "addFlag", "flag": "contains_egg" }]
+    },
+    {
+      "id": "contains-milk",
+      "reason": "Milk is a major allergen.",
+      "when": { "kind": "anyAllergen", "values": ["milk"] },
+      "then": [{ "kind": "addFlag", "flag": "contains_milk" }]
+    },
+    {
+      "id": "contains-soy",
+      "reason": "Soy is a major allergen.",
+      "when": { "kind": "anyAllergen", "values": ["soy"] },
+      "then": [{ "kind": "addFlag", "flag": "contains_soy" }]
+    },
+    {
+      "id": "contains-wheat",
+      "reason": "Wheat (gluten) is a major allergen.",
+      "when": { "kind": "anyAllergen", "values": ["wheat"] },
+      "then": [{ "kind": "addFlag", "flag": "contains_wheat" }]
+    },
+    {
+      "id": "contains-celery",
+      "reason": "Celery is a listed allergen in the EU.",
+      "when": { "kind": "anyAllergen", "values": ["celery"] },
+      "then": [{ "kind": "addFlag", "flag": "contains_celery" }]
+    }
+  ]
+}
