@@ -4,6 +4,7 @@ import {
   VersioningType,
 } from '@nestjs/common';
 import { GlobalExceptionFilter } from '@/commons/filters/global-exception.filter.js';
+import { buildCorsOptions } from '@/commons/http/cors.js';
 
 export const API_PREFIX = 'api';
 export const DOCS_PATH = `${API_PREFIX}/docs`;
@@ -21,4 +22,12 @@ export function configureHttpApp(app: INestApplication): void {
       transformOptions: { enableImplicitConversion: true },
     }),
   );
+}
+
+// Bootstrap step 6 in main.ts; also used by the e2e suite so the CORS behaviour under test ships.
+export function configureCors(
+  app: INestApplication,
+  origins: readonly string[],
+): void {
+  app.enableCors(buildCorsOptions(origins));
 }

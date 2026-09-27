@@ -7,7 +7,8 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../../src/app.module.js';
-import { configureHttpApp } from '../../src/app.setup.js';
+import { configureCors, configureHttpApp } from '../../src/app.setup.js';
+import { AppConfigService } from '../../src/config/app-config.service.js';
 import {
   buildCatalog,
   parseOverlay,
@@ -24,13 +25,24 @@ export const RETIRED_MODEL_VERSION = 'yolov8n-ingredients-0.0.0-test';
 const SEED_DATA_DIR = join(import.meta.dirname, '../../src/seeders/data');
 const CLASSES_FIXTURE = join(import.meta.dirname, '../fixtures/classes.yaml');
 
-export async function createE2eApp(): Promise<INestApplication> {
+export interface E2eAppOptions {
+  /** Overrides CORS_ORIGINS from the test env, for the CORS suite. */
+  readonly corsOrigins?: readonly string[];
+}
+
+export async function createE2eApp(
+  options: E2eAppOptions = {},
+): Promise<INestApplication> {
   const moduleFixture = await Test.createTestingModule({
     imports: [AppModule],
   }).compile();
 
   const app = moduleFixture.createNestApplication();
   configureHttpApp(app);
+  configureCors(
+    app,
+    options.corsOrigins ?? app.get(AppConfigService).corsOrigins,
+  );
   await app.init();
   return app;
 }
