@@ -1,0 +1,122 @@
+name: CI
+
+# Checks only (ADR 0013). Also called by both deploy workflows, which deploy the commit it tested.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+    inputs:
+      ref:
+        description: Branch, tag or commit to check out (defaults to the triggering ref).
+        type: string
+        required: false
+        default: ''
+    outputs:
+      commit:
+        description: Full SHA of the commit that was checked.
+        value: ${{ jobs.checks.outputs.commit }}
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels its superseded run; every other run gets its own group.
+concurrency:
+  group: ci-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  checks:
+    name: Lint, build, test, audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      commit: ${{ steps.checkout.outputs.commit }}
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          # Throwaway CI-only database on the runner; not a secret.
+          POSTGRES_USER: denly_ci
+          POSTGRES_PASSWORD: denly_ci
+          POSTGRES_DB: denly_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U denly_ci -d denly_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Check out
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate a per-run JWT secret
+        run: |
+          secret="$(openssl rand -base64 48 | tr -d '\n')"
+          echo "::add-mask::${secret}"
+          echo "JWT_ACCESS_SECRET=${secret}" >> "$GITHUB_ENV"
+
+      - name: Lint
+        run: pnpm lint:check
+
+      - name: Typecheck (src and test)
+        run: pnpm exec tsc --noEmit -p tsconfig.json
+
+      - name: Build
+        run: pnpm build
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: e2e tests
+        env:
+          NODE_ENV: test
+          DB_HOST: localhost
+          DB_PORT: '5432'
+          DB_USERNAME: denly_ci
+          DB_PASSWORD: denly_ci
+          DB_NAME: denly_test
+        run: pnpm test:e2e
+
+      - name: Audit production dependencies
+        run: pnpm audit --prod --audit-level high
+
+  image:
+    name: Docker image build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=denly-api
+          cache-to: type=gha,scope=denly-api,mode=max

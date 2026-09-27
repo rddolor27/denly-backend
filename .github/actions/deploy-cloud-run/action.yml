@@ -1,0 +1,320 @@
+name: Deploy denly-api to Cloud Run
+description: >-
+  Shared deploy steps for both deploy workflows (ADR 0013): build and push the image to Artifact
+  Registry, run the migrate and seed Cloud Run jobs, deploy the denly-api service, smoke-test
+  /api/health and write a job summary. The caller checks out the commit to deploy and grants
+  `id-token: write`. All configuration is non-secret; app secrets stay in Secret Manager.
+
+inputs:
+  environment:
+    description: GitHub Environment being deployed (staging | production). Labels and summary only.
+    required: true
+  image-tag:
+    description: Primary image tag — vX.Y.Z for production, sha-<short> for staging.
+    required: true
+  gcp-project-id:
+    description: GCP project of this environment (vars.GCP_PROJECT_ID).
+    required: true
+  gcp-region:
+    description: Region of Cloud Run, Artifact Registry and Cloud SQL (vars.GCP_REGION).
+    required: true
+  workload-identity-provider:
+    description: Full WIF provider resource name (vars.GCP_WORKLOAD_IDENTITY_PROVIDER).
+    required: true
+  deploy-service-account:
+    description: Service account GitHub impersonates to deploy (vars.GCP_DEPLOY_SERVICE_ACCOUNT).
+    required: true
+  runtime-service-account:
+    description: Service account the service and jobs run as (vars.GCP_RUNTIME_SERVICE_ACCOUNT).
+    required: true
+  cloud-sql-connection-name:
+    description: project:region:instance of the Cloud SQL instance (vars.CLOUD_SQL_CONNECTION_NAME).
+    required: true
+  db-name:
+    description: Database name (vars.DB_NAME).
+    required: true
+  db-username:
+    description: Database user (vars.DB_USERNAME); its password is the db-password secret.
+    required: true
+  cors-origins:
+    description: Comma-separated browser origins allowed by CORS (vars.CORS_ORIGINS); may be empty.
+    required: false
+    default: ''
+  max-instances:
+    description: Cloud Run max instances (vars.CLOUD_RUN_MAX_INSTANCES).
+    required: false
+    default: '3'
+
+outputs:
+  image:
+    description: Deployed image reference, pinned by digest.
+    value: ${{ steps.release.outputs.image }}
+  revision:
+    description: Cloud Run revision now serving 100% of traffic.
+    value: ${{ steps.release.outputs.revision }}
+  url:
+    description: Service URL.
+    value: ${{ steps.release.outputs.url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check deploy configuration
+      id: config
+      shell: bash
+      env:
+        DEPLOY_ENV: ${{ inputs.environment }}
+        IMAGE_TAG: ${{ inputs.image-tag }}
+        GCP_PROJECT_ID: ${{ inputs.gcp-project-id }}
+        GCP_REGION: ${{ inputs.gcp-region }}
+        GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ inputs.workload-identity-provider }}
+        GCP_DEPLOY_SERVICE_ACCOUNT: ${{ inputs.deploy-service-account }}
+        GCP_RUNTIME_SERVICE_ACCOUNT: ${{ inputs.runtime-service-account }}
+        CLOUD_SQL_CONNECTION_NAME: ${{ inputs.cloud-sql-connection-name }}
+        DB_NAME: ${{ inputs.db-name }}
+        DB_USERNAME: ${{ inputs.db-username }}
+        MAX_INSTANCES: ${{ inputs.max-instances }}
+      run: |
+        set -euo pipefail
+        missing=()
+        for name in GCP_PROJECT_ID GCP_REGION GCP_WORKLOAD_IDENTITY_PROVIDER \
+          GCP_DEPLOY_SERVICE_ACCOUNT GCP_RUNTIME_SERVICE_ACCOUNT CLOUD_SQL_CONNECTION_NAME \
+          DB_NAME DB_USERNAME; do
+          [[ -n "${!name:-}" ]] || missing+=("$name")
+        done
+        if (( ${#missing[@]} > 0 )); then
+          echo "::error title=Deploy not configured::GitHub Environment '${DEPLOY_ENV}' is missing variables: ${missing[*]} (docs/deployment.md, section 3)"
+          exit 1
+        fi
+        max_instances="${MAX_INSTANCES:-3}"
+        if [[ ! "$max_instances" =~ ^[1-9][0-9]{0,2}$ ]]; then
+          echo "::error title=Invalid CLOUD_RUN_MAX_INSTANCES::expected a positive integer, got '${max_instances}'"
+          exit 1
+        fi
+        if [[ ! "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+          echo "::error title=Invalid image tag::'${IMAGE_TAG}' is not a valid Docker tag"
+          exit 1
+        fi
+
+        sha="$(git rev-parse HEAD)"
+        short="${sha::7}"
+        image="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/denly/denly-api"
+        tags="${image}:${IMAGE_TAG}"
+        [[ "$IMAGE_TAG" == "sha-${short}" ]] || tags="${tags},${image}:sha-${short}"
+        # Cloud Run label values: lowercase letters, digits, '_' and '-', at most 63 characters.
+        version_label="${IMAGE_TAG,,}"
+        version_label="${version_label//[^a-z0-9_-]/-}"
+        {
+          echo "sha=${sha}"
+          echo "short-sha=${short}"
+          echo "image=${image}"
+          echo "tags=${tags}"
+          echo "max-instances=${max_instances}"
+          echo "labels=app=denly-api,env=${DEPLOY_ENV,,},version=${version_label:0:63},commit=${short},managed-by=github-actions"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Authenticate to Google Cloud (Workload Identity Federation)
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      with:
+        project_id: ${{ inputs.gcp-project-id }}
+        workload_identity_provider: ${{ inputs.workload-identity-provider }}
+        service_account: ${{ inputs.deploy-service-account }}
+
+    - name: Set up gcloud
+      uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      with:
+        project_id: ${{ inputs.gcp-project-id }}
+
+    - name: Configure Docker for Artifact Registry
+      shell: bash
+      env:
+        GCP_REGION: ${{ inputs.gcp-region }}
+      run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+    - name: Build and push image
+      id: build
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      with:
+        context: .
+        platforms: linux/amd64
+        push: true
+        tags: ${{ steps.config.outputs.tags }}
+        labels: |
+          org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          org.opencontainers.image.revision=${{ steps.config.outputs.sha }}
+          org.opencontainers.image.version=${{ inputs.image-tag }}
+        cache-from: type=gha,scope=denly-api
+        cache-to: type=gha,scope=denly-api,mode=max
+
+    - name: Write runtime environment files
+      id: env-files
+      shell: bash
+      env:
+        GCP_PROJECT_ID: ${{ inputs.gcp-project-id }}
+        CLOUD_SQL_CONNECTION_NAME: ${{ inputs.cloud-sql-connection-name }}
+        DB_NAME: ${{ inputs.db-name }}
+        DB_USERNAME: ${{ inputs.db-username }}
+        CORS_ORIGINS: ${{ inputs.cors-origins }}
+      # --env-vars-file instead of --set-env-vars: commas in CORS_ORIGINS would split the flag.
+      # JSON is valid YAML, and jq escapes every value. No secrets here — those come from Secret
+      # Manager via --set-secrets. NO_COLOR (jobs only): the seed CLI logs through Nest's plain
+      # console logger, whose ANSI colours would otherwise land in Cloud Logging.
+      run: |
+        set -euo pipefail
+        dir="${RUNNER_TEMP}/denly-deploy"
+        mkdir -p "$dir"
+        jq -n \
+          --arg project "$GCP_PROJECT_ID" \
+          --arg dbHost "/cloudsql/${CLOUD_SQL_CONNECTION_NAME}" \
+          --arg dbUser "$DB_USERNAME" \
+          --arg dbName "$DB_NAME" \
+          '{NODE_ENV: "production", LOG_FORMAT: "json", LOG_LEVEL: "info",
+            GCP_PROJECT_ID: $project, DB_HOST: $dbHost, DB_USERNAME: $dbUser, DB_NAME: $dbName}' \
+          > "${dir}/service-env.yaml"
+        jq '. + {NO_COLOR: "1"}' "${dir}/service-env.yaml" > "${dir}/job-env.yaml"
+        if [[ -n "$CORS_ORIGINS" ]]; then
+          jq --arg cors "$CORS_ORIGINS" '. + {CORS_ORIGINS: $cors}' "${dir}/service-env.yaml" \
+            > "${dir}/service-env.tmp" && mv "${dir}/service-env.tmp" "${dir}/service-env.yaml"
+        fi
+        echo "dir=${dir}" >> "$GITHUB_OUTPUT"
+
+    - name: Run database migrations (Cloud Run job denly-api-migrate)
+      shell: bash
+      env:
+        IMAGE_REF: ${{ steps.config.outputs.image }}@${{ steps.build.outputs.digest }}
+        GCP_REGION: ${{ inputs.gcp-region }}
+        CLOUD_SQL_CONNECTION_NAME: ${{ inputs.cloud-sql-connection-name }}
+        RUNTIME_SA: ${{ inputs.runtime-service-account }}
+        ENV_FILE: ${{ steps.env-files.outputs.dir }}/job-env.yaml
+        LABELS: ${{ steps.config.outputs.labels }}
+      run: |
+        set -euo pipefail
+        gcloud run jobs deploy denly-api-migrate \
+          --image="$IMAGE_REF" \
+          --region="$GCP_REGION" \
+          --command=node \
+          --args="node_modules/typeorm/cli.js,migration:run,-d,dist/data-source.js" \
+          --set-cloudsql-instances="$CLOUD_SQL_CONNECTION_NAME" \
+          --service-account="$RUNTIME_SA" \
+          --env-vars-file="$ENV_FILE" \
+          --set-secrets="DB_PASSWORD=db-password:latest" \
+          --tasks=1 \
+          --max-retries=0 \
+          --task-timeout=10m \
+          --labels="$LABELS" \
+          --execute-now \
+          --wait \
+          --quiet
+
+    - name: Sync ingredient catalog (Cloud Run job denly-api-seed)
+      shell: bash
+      env:
+        IMAGE_REF: ${{ steps.config.outputs.image }}@${{ steps.build.outputs.digest }}
+        GCP_REGION: ${{ inputs.gcp-region }}
+        CLOUD_SQL_CONNECTION_NAME: ${{ inputs.cloud-sql-connection-name }}
+        RUNTIME_SA: ${{ inputs.runtime-service-account }}
+        ENV_FILE: ${{ steps.env-files.outputs.dir }}/job-env.yaml
+        LABELS: ${{ steps.config.outputs.labels }}
+      # Idempotent upsert of the taxonomy snapshot baked into the image (README § denly-ml).
+      run: |
+        set -euo pipefail
+        gcloud run jobs deploy denly-api-seed \
+          --image="$IMAGE_REF" \
+          --region="$GCP_REGION" \
+          --command=node \
+          --args="dist/seeders/run-seed.js" \
+          --set-cloudsql-instances="$CLOUD_SQL_CONNECTION_NAME" \
+          --service-account="$RUNTIME_SA" \
+          --env-vars-file="$ENV_FILE" \
+          --set-secrets="DB_PASSWORD=db-password:latest" \
+          --tasks=1 \
+          --max-retries=0 \
+          --task-timeout=10m \
+          --labels="$LABELS" \
+          --execute-now \
+          --wait \
+          --quiet
+
+    - name: Deploy service denly-api
+      shell: bash
+      env:
+        IMAGE_REF: ${{ steps.config.outputs.image }}@${{ steps.build.outputs.digest }}
+        GCP_REGION: ${{ inputs.gcp-region }}
+        CLOUD_SQL_CONNECTION_NAME: ${{ inputs.cloud-sql-connection-name }}
+        RUNTIME_SA: ${{ inputs.runtime-service-account }}
+        ENV_FILE: ${{ steps.env-files.outputs.dir }}/service-env.yaml
+        MAX_INSTANCES: ${{ steps.config.outputs.max-instances }}
+        LABELS: ${{ steps.config.outputs.labels }}
+      # Public: the mobile app calls it; auth is the app's own JWT guard (ADR 0012). The startup
+      # probe (health = DB ping) must pass before the revision can take traffic.
+      run: |
+        set -euo pipefail
+        gcloud run deploy denly-api \
+          --image="$IMAGE_REF" \
+          --region="$GCP_REGION" \
+          --allow-unauthenticated \
+          --port=8080 \
+          --min-instances=0 \
+          --max-instances="$MAX_INSTANCES" \
+          --cpu-boost \
+          --set-cloudsql-instances="$CLOUD_SQL_CONNECTION_NAME" \
+          --service-account="$RUNTIME_SA" \
+          --env-vars-file="$ENV_FILE" \
+          --set-secrets="DB_PASSWORD=db-password:latest,JWT_ACCESS_SECRET=jwt-access-secret:latest" \
+          --startup-probe="httpGet.path=/api/health,httpGet.port=8080,initialDelaySeconds=0,periodSeconds=5,timeoutSeconds=3,failureThreshold=24" \
+          --labels="$LABELS" \
+          --quiet
+        # A manual rollback pins traffic to an old revision; a deploy always takes 100% again.
+        gcloud run services update-traffic denly-api --region="$GCP_REGION" --to-latest --quiet
+
+    - name: Smoke test /api/health
+      id: release
+      shell: bash
+      env:
+        IMAGE_REF: ${{ steps.config.outputs.image }}@${{ steps.build.outputs.digest }}
+        GCP_REGION: ${{ inputs.gcp-region }}
+      run: |
+        set -euo pipefail
+        url="$(gcloud run services describe denly-api --region="$GCP_REGION" --format='value(status.url)')"
+        revision="$(gcloud run services describe denly-api --region="$GCP_REGION" --format='value(status.latestReadyRevisionName)')"
+        if ! body="$(curl --fail --silent --show-error --max-time 10 \
+          --retry 10 --retry-delay 6 --retry-all-errors "${url}/api/health")"; then
+          echo "::error title=Smoke test failed::GET ${url}/api/health did not return 2xx (revision ${revision})"
+          exit 1
+        fi
+        if ! jq -e '.status == "ok"' <<<"$body" > /dev/null; then
+          echo "::error title=Smoke test failed::unexpected health body: ${body}"
+          exit 1
+        fi
+        echo "GET ${url}/api/health -> ${body}"
+        {
+          echo "image=${IMAGE_REF}"
+          echo "revision=${revision}"
+          echo "url=${url}"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Job summary
+      shell: bash
+      env:
+        DEPLOY_ENV: ${{ inputs.environment }}
+        IMAGE_TAG: ${{ inputs.image-tag }}
+        COMMIT: ${{ steps.config.outputs.sha }}
+        IMAGE_REF: ${{ steps.release.outputs.image }}
+        REVISION: ${{ steps.release.outputs.revision }}
+        URL: ${{ steps.release.outputs.url }}
+      run: |
+        {
+          echo "### denly-api deployed to \`${DEPLOY_ENV}\`"
+          echo
+          echo "| | |"
+          echo "|---|---|"
+          echo "| Version | \`${IMAGE_TAG}\` |"
+          echo "| Commit | \`${COMMIT}\` |"
+          echo "| Image | \`${IMAGE_REF}\` |"
+          echo "| Revision | \`${REVISION}\` (100% traffic) |"
+          echo "| URL | ${URL} |"
+          echo "| Health | \`GET /api/health\` → 200 |"
+        } >> "$GITHUB_STEP_SUMMARY"

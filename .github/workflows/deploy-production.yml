@@ -1,0 +1,74 @@
+name: Deploy Production (release)
+
+# A published GitHub Release tagged vMAJOR.MINOR.PATCH deploys to the production GCP project after
+# CI passes and a reviewer approves the `production` environment (ADR 0013). Prereleases are ignored.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  release-tag:
+    name: Check release tag
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require a vMAJOR.MINOR.PATCH tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Invalid release tag::'${TAG}' is not vMAJOR.MINOR.PATCH; production deploys only from such tags."
+            exit 1
+          fi
+          echo "Release tag ${TAG} accepted."
+
+  ci:
+    name: CI
+    needs: release-tag
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: refs/tags/${{ github.event.release.tag_name }}
+    permissions:
+      contents: read
+
+  deploy:
+    name: Deploy to production
+    needs: [release-tag, ci]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.url }}
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - name: Check out the commit CI tested
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.ci.outputs.commit }}
+          persist-credentials: false
+
+      - name: Deploy
+        id: deploy
+        uses: ./.github/actions/deploy-cloud-run
+        with:
+          environment: production
+          image-tag: ${{ github.event.release.tag_name }}
+          gcp-project-id: ${{ vars.GCP_PROJECT_ID }}
+          gcp-region: ${{ vars.GCP_REGION }}
+          workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          deploy-service-account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          runtime-service-account: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }}
+          cloud-sql-connection-name: ${{ vars.CLOUD_SQL_CONNECTION_NAME }}
+          db-name: ${{ vars.DB_NAME }}
+          db-username: ${{ vars.DB_USERNAME }}
+          cors-origins: ${{ vars.CORS_ORIGINS }}
+          max-instances: ${{ vars.CLOUD_RUN_MAX_INSTANCES || '3' }}

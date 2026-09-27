@@ -1,0 +1,67 @@
+name: Deploy Staging (manual)
+
+# Manual deploy of any branch, tag or commit to the staging GCP project (ADR 0013).
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit to deploy
+        type: string
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ inputs.ref }}
+    permissions:
+      contents: read
+
+  deploy:
+    name: Deploy to staging
+    needs: ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: staging
+      url: ${{ steps.deploy.outputs.url }}
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+    steps:
+      - name: Check out the commit CI tested
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.ci.outputs.commit }}
+          persist-credentials: false
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          sha="$(git rev-parse HEAD)"
+          echo "tag=sha-${sha::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy
+        id: deploy
+        uses: ./.github/actions/deploy-cloud-run
+        with:
+          environment: staging
+          image-tag: ${{ steps.tag.outputs.tag }}
+          gcp-project-id: ${{ vars.GCP_PROJECT_ID }}
+          gcp-region: ${{ vars.GCP_REGION }}
+          workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          deploy-service-account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          runtime-service-account: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }}
+          cloud-sql-connection-name: ${{ vars.CLOUD_SQL_CONNECTION_NAME }}
+          db-name: ${{ vars.DB_NAME }}
+          db-username: ${{ vars.DB_USERNAME }}
+          cors-origins: ${{ vars.CORS_ORIGINS }}
+          max-instances: ${{ vars.CLOUD_RUN_MAX_INSTANCES || '3' }}
