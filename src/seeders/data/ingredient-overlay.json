@@ -1,0 +1,32 @@
+{
+  "displayNames": {
+    "chili_small": "Bird's eye chili",
+    "chili_long": "Long green chili",
+    "chicken_raw": "Chicken",
+    "pork_raw": "Pork",
+    "beef_raw": "Beef",
+    "fish_whole": "Whole fish"
+  },
+  "allergens": {
+    "egg": ["egg"],
+    "salted_egg": ["egg"],
+    "milkfish": ["fish"],
+    "tilapia": ["fish"],
+    "round_scad": ["fish"],
+    "fish_whole": ["fish"],
+    "dried_fish": ["fish"],
+    "dried_anchovies": ["fish"],
+    "smoked_fish": ["fish"],
+    "shrimp": ["crustacean_shellfish"],
+    "crab": ["crustacean_shellfish"],
+    "squid": ["mollusc"],
+    "mussels": ["mollusc"],
+    "clams": ["mollusc"],
+    "cheese": ["milk"],
+    "tofu": ["soy"],
+    "bread": ["wheat"],
+    "celery": ["celery"],
+    "chinese_celery": ["celery"]
+  },
+  "dietaryFlags": {}
+}
