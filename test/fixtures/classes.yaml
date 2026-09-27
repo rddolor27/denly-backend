@@ -1,0 +1,25 @@
+# A small model version in denly-ml's classes.yaml format (a dataset release writes the same shape).
+- id: 0
+  name: egg
+  tier: A
+  group: egg
+- id: 1
+  name: tomato
+  tier: A
+  group: vegetable
+- id: 3
+  name: garlic
+  tier: A
+  group: aromatic
+- id: 51
+  name: chicken_raw
+  tier: A
+  group: meat
+- id: 61
+  name: shrimp
+  tier: A
+  group: seafood
+- id: 67
+  name: tofu
+  tier: A
+  group: protein
