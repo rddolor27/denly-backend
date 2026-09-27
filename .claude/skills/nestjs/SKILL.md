@@ -101,19 +101,21 @@ runtime is installed here.
   served at `/api/docs` outside production. The
   OpenAPI output *is* the mobile contract, including the `DetectionRun` and manifest shapes.
 
-## Bootstrap order (`main.ts`) — implement when the repo exists
+## Bootstrap order (`main.ts`)
 
-1. Logger (Nest `Logger` facade over Winston, JSON in deployed envs, request id from
+1. Logger (Nest `Logger` facade over Winston via `AppLogger`, `src/commons/logging/`: JSON lines
+   with `severity` for Cloud Logging when deployed, pretty locally; request id and Cloud trace from
    `AsyncLocalStorage`) + process-level `uncaughtException`/`unhandledRejection` handlers.
 2. `configureHttpApp` (`src/app.setup.ts`, shared with the e2e suite): `/api` prefix, URI
    versioning, global exception filter, global `ValidationPipe`. 3. Swagger at `/api/docs`
    (non-prod, bearer auth). 4. `helmet()`. 5. Body parsers with explicit limits.
 6. CORS via a dynamic origin callback reading `CORS_ORIGINS` (mobile apps send no `Origin`; allow
-   the empty origin) — deferred. 7. Shutdown hooks.
+   the empty origin; unlisted browser origins get no CORS headers). 7. Shutdown hooks.
 8. Throttler tiers, overridable per route with `@Throttle()`, strict on `/api/v1/auth/*`;
    `@SkipThrottle()` only on `/api/health` — deferred.
 
-CORS, rate limiting and observability are conventions until the user asks for them.
+Rate limiting and metrics/tracing stay conventions until the user asks. Deployment is ADR 0013:
+Cloud Run + Cloud SQL via GitHub Actions (`docs/deployment.md` in the backend repo).
 
 ## Pipeline orchestration (scans)
 

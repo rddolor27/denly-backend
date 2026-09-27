@@ -114,20 +114,26 @@ Backend: mobile request → API → DTO validation → model registry → applic
   owned by `user_id` and read only by their owner. Offline scanning on the phone needs no account.
 - The app keeps the refresh token in the Keychain, the access token in memory.
 
-## Deferred on purpose
+## Deployment (ADR 0013) and what is still deferred
 
-CORS, rate limiting, observability, deployment and the LLM provider are implemented when the
-user asks. Until then they are
-conventions in the skills, not code. The cloud is **GCP** (ADR 0008 — Cloud Run, Cloud SQL,
-Cloud Storage assumed); local development uses the Windows PostgreSQL 17 service on
-`localhost:5432`. No cloud SDK or deploy config until deployment is asked for.
+The backend runs on **Cloud Run** with **Cloud SQL for PostgreSQL 17**, one GCP project each for
+staging and production (ADR 0008), built from the repo `Dockerfile` and deployed by GitHub
+Actions: `Deploy Staging (manual)` for any ref, `Deploy Production (release)` for a published
+`vX.Y.Z` release. The app builds on EAS: `Build Preview (manual)` and `Build Production
+(release)`, never submitted to the stores until #2 is decided. GitHub reaches GCP only through
+Workload Identity Federation (no service-account keys); runtime secrets live in Secret Manager.
+Backend logs are Winston JSON lines for Cloud Logging; CORS allows only `CORS_ORIGINS`. No Helm or
+GKE. Local development stays on the Windows PostgreSQL 17 service on `localhost:5432`.
+
+Still deferred until the user asks: rate limiting (required before a public launch, #14),
+metrics/tracing beyond logs, Cloud Storage for packs and models, and the LLM provider.
 
 ## Ask before deciding
 
 The YOLOv8 licence route for a distributed app, the on-device runtime integration, over-the-air
 model updates, the LLM provider, the schema-validation library, whether images ever leave the
 phone, data-pack tier contents, the SQLite library (`expo-sqlite` assumed), pack delivery details,
-a shared package vs conformance-tested duplication, which GCP services and which CI. (Settled:
-detection taxonomy 0006, Expo dev build + Expo Router + pnpm 0007, GCP 0008.) These change what
+a shared package vs conformance-tested duplication, any GCP service beyond ADR 0013. (Settled:
+detection taxonomy 0006, Expo dev build + Expo Router + pnpm 0007, GCP 0008, CI/CD 0013.) These change what
 gets built — surface them, do not settle
 them silently. `documentations/decisions/open-decisions.md` tracks the list.

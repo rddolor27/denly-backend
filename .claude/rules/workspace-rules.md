@@ -10,7 +10,8 @@
 - No shared `package.json`, no workspace file, no `packages/` folder, no cross-repo imports. The
   only contract between the repos is the HTTP API (documented from the backend's OpenAPI output
   once it exists).
-- Both app repos were scaffolded on 2026-09-23 (each `git init` on `main`, no commits yet). After
+- Both app repos were scaffolded on 2026-09-23 and live on GitHub (`rddolor27/denly-backend`,
+  `rddolor27/denly-mobile-app`), each with its own GitHub Actions workflows (ADR 0013). After
   any root `.claude` change, run `node .claude/sync-claude-config.js` from the root so every repo
   receives the shared config; each repo keeps its own `.claude/CLAUDE.md`.
 - `denly-ml/` (ADR 0005) is a third, independent repo for ML tooling — Python, `uv`. It is never
