@@ -1,0 +1,23 @@
+# Allow-list: the build context holds only what the Dockerfile copies. Everything else —
+# node_modules, dist, coverage, .git, .github, .claude, docs, test/, test output, tsbuildinfo,
+# editor folders and every env file — is excluded by the first line.
+*
+!package.json
+!pnpm-lock.yaml
+!nest-cli.json
+!tsconfig.json
+!tsconfig.build.json
+!src/
+
+# Never in the context, even inside an allowed path: secrets and local build/test output.
+**/.env
+**/.env.*
+**/*.env
+**/secrets/
+**/*.pem
+**/*.key
+**/*.p12
+**/*.tsbuildinfo
+**/node_modules/
+**/dist/
+**/coverage/
