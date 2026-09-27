@@ -4,9 +4,10 @@ NestJS + TypeScript + TypeORM + PostgreSQL REST API consumed by `../denly-mobile
 independent of the mobile app — the HTTP API (OpenAPI at `/docs` in non-prod) is the only contract.
 Never import from it; never add a monorepo.
 
-Hosting is GCP (ADR 0008 — Cloud Run + Cloud SQL assumed). Nothing GCP-specific is implemented
-here yet. Local development uses the Windows PostgreSQL 17 service on `localhost:5432` (databases
-`denly` and `denly_test`) — no Docker database.
+Hosting is GCP (ADR 0008 — Cloud Run + Cloud SQL assumed). The only GCP-shaped code is the JSON
+log format (stdout lines Cloud Logging parses, trace field via `GCP_PROJECT_ID`); no GCP SDK, no
+deploy config yet. Local development uses the Windows PostgreSQL 17 service on `localhost:5432`
+(databases `denly` and `denly_test`) — no Docker database.
 
 ## Stack
 
@@ -23,6 +24,12 @@ here yet. Local development uses the Windows PostgreSQL 17 service on `localhost
 - **Test runner: Vitest, not Jest** — see "Deviations from the skills" below
 - **Lint: ESLint 10 flat config + typescript-eslint**, not the Nest CLI's new oxlint default —
   matches the coding-rules "ESLint" house convention
+- **Logging: winston behind the Nest `Logger` facade** via the in-repo `AppLogger`
+  (`src/commons/logging/`, installed in `main.ts` with `app.useLogger`) — not `nest-winston`, not
+  `@google-cloud/logging-winston`. `LOG_FORMAT=json` (default in production) = Cloud Logging
+  lines on stdout; `pretty` otherwise. Keep calling `new Logger(X.name)`.
+- **CORS** (bootstrap step 6, `configureCors` in `app.setup.ts`): origin callback over the exact
+  origins in `CORS_ORIGINS`; no `Origin` header passes, unlisted origins get no CORS headers
 
 ## Commands
 
@@ -47,8 +54,9 @@ src/
   config/                    typed, validated env access (env.validation.ts, app-config.service.ts,
                              config.module.ts)
   commons/                   errors/ (DomainError, DatabaseUnavailableError), filters/
-                             (GlobalExceptionFilter), context/ + middlewares/ (request id via
-                             AsyncLocalStorage), database/ (SnakeNamingStrategy — implemented
+                             (GlobalExceptionFilter), context/ + middlewares/ (request id + trace
+                             id via AsyncLocalStorage), logging/ (AppLogger over winston), http/
+                             (buildCorsOptions), database/ (SnakeNamingStrategy — implemented
                              locally, not the `typeorm-naming-strategies` package, which only
                              declares a typeorm@^0.2||^0.3 peer range), dtos/ (ErrorResponseDto)
   migrations/                generated migrations + index.ts

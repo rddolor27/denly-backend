@@ -21,6 +21,8 @@ and boundaries this repo has to keep.
 - **@nestjs/swagger** for the OpenAPI document served at `/api/docs` outside production.
 - **@nestjs/jwt + @nestjs/passport + passport-jwt** for access tokens (one Passport strategy);
   passwords hashed with `node:crypto` scrypt (no extra dependency).
+- **winston** behind Nest's `Logger` facade (`src/commons/logging/`, a small in-repo adapter —
+  not `nest-winston`); JSON to stdout for Cloud Logging, no GCP logging SDK.
 - **Vitest** (not Jest — see "Deviation from the skill" below), **ESLint 10** flat config +
   `typescript-eslint` (not oxlint — the coding-rules' "ESLint" house convention), Prettier.
 - **pnpm 10**, **Node 24** (pinned in `engines` and `.nvmrc`).
@@ -43,9 +45,10 @@ whoever owns the workspace root — this repo did not touch `../.claude/`.**
 
 ```
 src/
-  main.ts               bootstrap: logger -> configureHttpApp -> swagger -> helmet -> body parsers ->
-                         CORS (deferred) -> shutdown hooks -> throttler (deferred)
-  app.setup.ts           configureHttpApp: /api prefix, URI versioning, global filter + pipe (shared with e2e)
+  main.ts               bootstrap: logger (AppLogger) -> configureHttpApp -> swagger -> helmet -> body
+                         parsers -> CORS -> shutdown hooks -> throttler (deferred)
+  app.setup.ts           configureHttpApp: /api prefix, URI versioning, global filter + pipe;
+                         configureCors (both shared with e2e)
   app.module.ts          ConfigModule, TypeOrmModule.forRootAsync, feature modules, RequestIdMiddleware
   health.controller.ts   GET /api/health (public, version-neutral) -> status + db ping
   health.service.ts      DataSource.query('SELECT 1'), throws DatabaseUnavailableError on failure
@@ -56,7 +59,9 @@ src/
   commons/
     errors/               DomainError base + DatabaseUnavailableError
     filters/               GlobalExceptionFilter -> { statusCode, code, message, details?, requestId, timestamp }
-    context/, middlewares/ AsyncLocalStorage request id, RequestIdMiddleware
+    context/, middlewares/ AsyncLocalStorage request id + trace id, RequestIdMiddleware, trace headers
+    logging/                AppLogger (winston behind the Nest Logger facade), JSON / pretty formats
+    http/                   buildCorsOptions (origin callback over CORS_ORIGINS)
     database/               SnakeNamingStrategy
     dtos/                   ErrorResponseDto (Swagger)
     auth/                   @Public(), @CurrentUser(), AuthenticatedUser
@@ -72,7 +77,7 @@ src/
   seeders/                run-seed.ts, import-model-version.ts, data/ (taxonomy snapshot, overlay)
 test/
   support/e2e-app.ts      boots AppModule via configureHttpApp, resets + seeds the *_test database
-  *.e2e-spec.ts           health, auth, catalog (ingredients + registry), scans
+  *.e2e-spec.ts           health, auth, catalog (ingredients + registry), scans, cors
 ```
 
 Not built yet: `analysis` (LLM port — provider undecided) and `data-packs` (offline SQLite packs).
@@ -161,9 +166,52 @@ Copy `.env.example` to `.env` for local dev (never commit `.env`). Names:
 | `JWT_ACCESS_SECRET` | **required**, ≥ 32 chars, random, different per environment; placeholders are rejected at boot | generate: `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"` |
 | `JWT_ACCESS_TTL_SECONDS` | access-token lifetime | `900` |
 | `REFRESH_TOKEN_TTL_DAYS` | how long one sign-in lasts | `30` |
+| `LOG_LEVEL` | optional: `error` \| `warn` \| `info` \| `debug` | unset → `info` in production, `warn` in test, `debug` in development |
+| `LOG_FORMAT` | optional: `json` (Cloud Logging) \| `pretty` | unset → `json` in production, `pretty` otherwise |
+| `CORS_ORIGINS` | optional: comma-separated exact browser origins, e.g. `https://admin.example.com,http://localhost:8081` | unset/empty → no browser origin allowed |
+| `GCP_PROJECT_ID` | optional: GCP project id; lets JSON logs carry the Cloud Trace field | unset → no trace field |
 
 Config is validated at boot (`src/config/env.validation.ts`) — missing or malformed vars fail
-fast with one clear error instead of a broken query later.
+fast with one clear error instead of a broken query later. The four optional vars above are
+either unset or valid: an empty `LOG_LEVEL=` is rejected, not treated as unset.
+
+## Logging
+
+Code logs through Nest's facade (`new Logger(MyService.name)`, `[methodName]` prefixes);
+`main.ts` installs `AppLogger` (`src/commons/logging/`, winston) with `app.useLogger` right after
+config loads, and `bufferLogs` holds Nest's boot logs until then. Everything goes to stdout, one
+entry per line.
+
+- **`json`** — one object per line, shaped for Cloud Logging (Cloud Run ships stdout for free, so
+  there is no logging API transport):
+
+  ```json
+  {"severity":"ERROR","message":"[ping] sample failure","time":"2026-09-27T13:26:39.154Z","context":"PingController","requestId":"smoke-req-1","logging.googleapis.com/trace":"projects/denly-smoke/traces/4bf92f3577b34da6a3ce929d0e0e4736","stack_trace":"Error: sample failure\n    at PingController.ping (...)"}
+  ```
+
+  `severity`: fatal → `CRITICAL`, error → `ERROR`, warn → `WARNING`, log → `INFO`, debug/verbose
+  → `DEBUG`. `time` (RFC 3339) becomes the entry's timestamp. `requestId` comes from `RequestIdMiddleware` (inside a request only).
+  `logging.googleapis.com/trace` is added when the request carried a valid `traceparent` (or,
+  failing that, `x-cloud-trace-context`) **and** `GCP_PROJECT_ID` is set — Cloud Run does not set
+  it for you. `stack_trace` (read by Error Reporting) stays inside the one JSON line. A
+  non-string message goes under `data` (depth/size-bounded, binary replaced by its length,
+  password/token/secret/cookie/authorization/email keys redacted).
+- **`pretty`** — `timestamp LEVEL [Context] message requestId=…`, coloured on a TTY, stack on the
+  following lines.
+
+Levels: `LOG_LEVEL` is the threshold (Nest `log` = `info`, `verbose` = `debug`; `fatal` always
+passes). No HTTP access log (Cloud Run writes request logs) and no TypeORM query logging. Never log
+tokens, passwords, emails, full request bodies or image bytes; log ids instead.
+
+## CORS
+
+Only browsers send `Origin`; the mobile app, curl and health probes don't and are always let
+through. `CORS_ORIGINS` lists the exact browser origins allowed (scheme + host + non-default
+port, lowercase, no path, query or trailing slash; `*` is rejected at boot). A listed origin gets
+`Access-Control-Allow-Origin` (reflected), methods `GET POST PATCH PUT DELETE OPTIONS`, headers
+`Authorization`, `Content-Type`, `x-request-id`, exposed `x-request-id`, max-age 600 s, and no
+credentials (auth is a bearer header, not cookies). Any other origin gets no CORS headers, so the
+browser blocks the response; the server does not turn it into an error.
 
 ### e2e's separate database
 
@@ -185,10 +233,12 @@ psql -U postgres -h localhost -p 5432 -c "CREATE DATABASE denly_test OWNER denly
 
 Then put the same user/password in your `.env` and `.env.test` (never committed).
 
-## Hosting
+## Hosting and deployment
 
-Deploys to GCP — see `documentations/decisions/0008-gcp-hosting.md` in the workspace
-(Cloud Run + Cloud SQL for PostgreSQL 17 assumed). No GCP code or SDKs until deployment is built.
+Cloud Run + Cloud SQL for PostgreSQL 17 on GCP (ADR 0008, 0013), built from the `Dockerfile`.
+GitHub Actions: `CI` on pull requests and `main`, `Deploy Staging (manual)` for any ref,
+`Deploy Production (release)` for a published `vX.Y.Z` release. One-time GCP and GitHub setup,
+releasing and rollback: [`docs/deployment.md`](docs/deployment.md).
 
 ## Error response shape
 
@@ -204,8 +254,8 @@ Every error response (nestjs skill § HTTP layer):
 
 ## Notes
 
-- No CORS, rate limiting, deployment or LLM code yet — `main.ts` marks where CORS and the
-  throttler plug in. **Rate limiting on `/api/v1/auth/*` is needed before any public deploy.**
+- No rate limiting or LLM code yet — `main.ts` marks where the throttler plugs in.
+  **Rate limiting on `/api/v1/auth/*` is needed before any public deploy.**
 - `GET /api/health` is version-neutral since infra probes hit it without a version; every other
   route defaults to `/v1`. Paths outside `/api` get Express's plain 404.
 - UUID defaults use core `gen_random_uuid()`; TypeORM installs no Postgres extensions at connect
